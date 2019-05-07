@@ -1,17 +1,5 @@
 package org.littleshoot.proxy;
 
-import static org.junit.Assert.*;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.nio.charset.Charset;
-import java.util.Arrays;
-
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
@@ -24,6 +12,17 @@ import org.apache.http.util.EntityUtils;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
+
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.Charset;
+import java.util.Arrays;
+
+import static org.junit.Assert.assertEquals;
 
 /**
  * Tests cases where either the client or the server is slower than the other.
@@ -73,7 +72,7 @@ public class VariableSpeedClientServerTest {
             private int remaining = CONTENT_LENGTH;
 
             @Override
-            public int read() throws IOException {
+            public int read() {
                 if (remaining > 0) {
                     remaining -= 1;
                     return 77;
@@ -83,7 +82,7 @@ public class VariableSpeedClientServerTest {
             }
 
             @Override
-            public int available() throws IOException {
+            public int available() {
                 return remaining;
             }
         }, CONTENT_LENGTH));
@@ -93,40 +92,31 @@ public class VariableSpeedClientServerTest {
         final long cl = entity.getContentLength();
         assertEquals(CONTENT_LENGTH, cl);
 
-        InputStream content = entity.getContent();
-        if (!slowServer) {
-            content = new ThrottledInputStream(entity.getContent(), 10 * 1000);
-        }
-        final byte[] input = new byte[100000];
-        int read = content.read(input);
-
         int bytesRead = 0;
-        while (read != -1) {
-            bytesRead += read;
-            read = content.read(input);
+        try (InputStream content = slowServer ? new ThrottledInputStream(entity.getContent(), 10 * 1000) : entity.getContent()) {
+            final byte[] input = new byte[100000];
+            int read = content.read(input);
+
+            while (read != -1) {
+                bytesRead += read;
+                read = content.read(input);
+            }
         }
         assertEquals(CONTENT_LENGTH, bytesRead);
         // final String body = IOUtils.toString(entity.getContent());
         EntityUtils.consume(entity);
-        content.close();
         System.out
                 .println("------------------ Memory Usage At Beginning ------------------");
         TestUtils.getOpenFileDescriptorsAndPrintMemoryUsage();
     }
 
-    private void startServer(final int port, final boolean slowReader)
-            throws Exception {
-        final Thread t = new Thread(new Runnable() {
-
-            @Override
-            public void run() {
-                try {
-                    startServerOnThread(port, slowReader);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+    private void startServer(final int port, final boolean slowReader) {
+        final Thread t = new Thread(() -> {
+            try {
+                startServerOnThread(port, slowReader);
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-
         }, "Test-Server-Thread");
         t.setDaemon(true);
         t.start();
@@ -134,8 +124,7 @@ public class VariableSpeedClientServerTest {
 
     private void startServerOnThread(int port, boolean slowReader)
             throws Exception {
-        final ServerSocket server = new ServerSocket(port);
-        try {
+        try (ServerSocket server = new ServerSocket(port)) {
             server.setSoTimeout(100000);
             final Socket sock = server.accept();
             InputStream is = sock.getInputStream();
@@ -154,9 +143,9 @@ public class VariableSpeedClientServerTest {
                             "Content-Type: text/html; charset=ISO-8859-1\r\n" +
                             "Server: gws\r\n" +
                             "Content-Length: " + CONTENT_LENGTH + "\r\n\r\n"; // 10
-                                                                              // gigs
-                                                                              // or
-                                                                              // so.
+            // gigs
+            // or
+            // so.
 
             os.write(responseHeaders.getBytes(Charset.forName("UTF-8")));
 
@@ -171,8 +160,6 @@ public class VariableSpeedClientServerTest {
                 remainingBytes -= numberOfBytesToWrite;
             }
             os.close();
-        } finally {
-            server.close();
         }
     }
 }
